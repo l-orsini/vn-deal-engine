@@ -20,7 +20,7 @@ subtitles).
 - [x] Query to the VNDB Kana API with filters (rating, votes, releases)
 - [x] Cover image filter to exclude NSFW content
 - [x] Steam appid extraction with a regular expression, with tests
-- [ ] Finding the appid through releases (in progress)
+- [x] Finding the appid through releases
 - [ ] Fetching prices
 - [ ] Streamlit card interface, with a "Show price" button
 - [ ] SQLite database and price history
