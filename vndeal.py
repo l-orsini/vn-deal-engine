@@ -12,48 +12,11 @@ ITAD_URL = "https://api.isthereanydeal.com"
 
 VN_URL = "https://api.vndb.org/kana/vn"
 
-# Creation base de donnee ============================================
-
-# vn_dict = { 'id vndb': {dict avec caracteristiques}, 'v203': {vndbid:'v203', titre: ..., avis: ..., prix: ...}}
-vn_dict = {}
 
 
 # VNDB.org API v2 (Kana) =============================================
-
-def regex_steam_appid(extlinks):
-    steam_link = 'store.steampowered.com'
-    for extlink in extlinks:
-        vendorlink = extlink['url']
-        if re.search(steam_link, vendorlink):
-            correspondance = re.search(r"https://store\.steampowered\.com/app/(\d+)/", vendorlink)
-            if correspondance:
-                return correspondance.group(1)
-    return None
-
-def vnid_to_steamid(vnid):
-    RELEASE_URL = "https://api.vndb.org/kana/release"
-    rbody = {
-    "filters": [
-        "and",
-        ['vn', '=', ['id', '=', vnid]],  
-        ['extlink', '=', 'steam'],
-        ['has_ero', '!=', 1]
-    ],
-    "fields": "extlinks.url",
-    "results": 1
-    }
-    response = requests.post(RELEASE_URL, json=rbody, timeout=10)
-    # print("Code HTTP (Release):", response.status_code)
-    if response.status_code != 200:
-        print(response.text)
-    else:
-        data = response.json()
-        extlinks = data['results'][0]['extlinks']
-        steamid = regex_steam_appid(extlinks)
-        return steamid
     
-
-def load_n_steam_ids(nb_vn):
+def load_n_vns(dictionnaire_vn, nb_vn):
     #SELECT id, title, rating, votecount, image.sexual, extlink
     #FROM vn 
     #WHERE rating >= 75 AND votecount >= 1000 AND existe au moins un release SFW et un release Steam. pourrait renvoyer un VN avec lien Steam mais pas SFW et vice versa ?  
@@ -77,16 +40,16 @@ def load_n_steam_ids(nb_vn):
     # print("Code HTTP :", response.status_code)
     if response.status_code != 200:
         print(response.text)
+        return None
     else:
         data = response.json()
         for visual_novel in data['results']:
-            steam_id = vnid_to_steamid(visual_novel['id'])
-            vn_dict[visual_novel['id']] = {
+            dictionnaire_vn[visual_novel['id']] = {
                 "vndb_id": visual_novel['id'],
                 "vndb_title": visual_novel["title"],
                 "vndb_rating": visual_novel["rating"],
                 "vndb_votecount": visual_novel["votecount"],
-                "steam_id": steam_id,
+                "steam_id": None,
                 "itad_id": None,
                 "price": None,
                 "price_history": None,
@@ -94,4 +57,106 @@ def load_n_steam_ids(nb_vn):
 }
 
 
+def vnid_to_steamid(vnid):
+    RELEASE_URL = "https://api.vndb.org/kana/release"
+    rbody = {
+    "filters": [
+        "and",
+        ['vn', '=', ['id', '=', vnid]],  
+        ['extlink', '=', 'steam'],
+        ['has_ero', '!=', 1]
+    ],
+    "fields": "extlinks.url",
+    "results": 1
+    }
+    response = requests.post(RELEASE_URL, json=rbody, timeout=10)
+    # print("Code HTTP (Release):", response.status_code)
+    if response.status_code != 200:
+        print(response.text)
+        return None
+    else:
+        data = response.json()
+        extlinks = data['results'][0]['extlinks']
+        steamid = regex_steam_appid(extlinks)
+        return steamid
+
+
+def regex_steam_appid(extlinks):
+    steam_link = 'store.steampowered.com'
+    for extlink in extlinks:
+        vendorlink = extlink['url']
+        if re.search(steam_link, vendorlink):
+            correspondance = re.search(r"https://store\.steampowered\.com/app/(\d+)/", vendorlink)
+            if correspondance:
+                return correspondance.group(1)
+    return None
+
+
+
 # IsThereAnyDeal API (2.11.0) =============================================
+
+def steam_to_itad_id(steam_id):
+    LOOKUP_URL = f"{ITAD_URL}/lookup/id/shop/{61}/v1" #61 est le shop ID de steam sur ITAD
+    payload = [f"app/{steam_id}"]
+    response = requests.post(
+        LOOKUP_URL,
+        params={"key": ITAD_API_KEY},
+        json=payload,
+        timeout=10,
+    )
+    if response.status_code != 200:
+        print(response.text)
+        return None
+    else:
+        data = response.json()
+        return data.get(f"app/{steam_id}")
+
+
+def itad_price(itad_id, country='US'):
+    LOOKUP_URL = f"{ITAD_URL}/games/prices/v3"
+    payload = [itad_id]
+    response = requests.post(
+        LOOKUP_URL,
+        params={"key": ITAD_API_KEY,
+                "country": country,
+                "shops": 61},
+        json=payload,
+        timeout=10,
+    )
+    if response.status_code != 200:
+        print(response.text)
+        return None
+    else:
+        data = response.json()
+        return data[0]["deals"][0].get("price", {}).get("amount")
+
+
+def price_history(itad_id, country='US'):
+    LOOKUP_URL = f"{ITAD_URL}/games/history/v2"
+    response = requests.get(
+        LOOKUP_URL,
+        params={"key": ITAD_API_KEY,
+                "id": itad_id,
+                "country": country,
+                "shops": 61},
+        timeout=10,
+    )
+    if response.status_code != 200:
+        print(response.text)
+        return None
+    else:
+        return response.json()
+
+
+# Main Temporaire
+
+# vn_dict = { 'id vndb': {dict avec caracteristiques}, 'v203': {vndbid:'v203', titre: ..., avis: ..., prix: ...}}
+# vn_dict = {}
+# load_n_vns(vn_dict, 1)
+# for visual_novel_id in vn_dict:
+#     visunal_novel_steam_id = vnid_to_steamid(visual_novel_id)
+#     vn_dict[visual_novel_id]['steam_id'] = visunal_novel_steam_id
+#     vn_dict[visual_novel_id]['itad_id'] = steam_to_itad_id(visunal_novel_steam_id)
+#     vn_dict[visual_novel_id]['price'] = itad_price(vn_dict[visual_novel_id]['itad_id'])
+
+# pprint.pprint(vn_dict)
