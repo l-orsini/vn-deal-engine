@@ -128,10 +128,18 @@ def itad_price(itad_id, country='US'):
         return None
     else:
         data = response.json()
-        return data[0]["deals"][0].get("price", {}).get("amount")
+        dict_price = {
+            "itad_id": itad_id,
+            "country": country,
+            "regular": data[0]['deals'][0]['regular']['amountInt'],
+            "price": data[0]['deals'][0]['price']['amountInt'],
+            "cut": data[0]['deals'][0]['cut'],
+            "currency": data[0]['deals'][0]['price']['currency'],
+            "timestamp": data[0]['deals'][0]['timestamp']
+        }
+        return dict_price
 
-
-def price_history(itad_id, country='US'):
+def price_history(itad_id, country='US'):           # a parametrer pour avoir historique tres anciens sans se faire bloquer
     LOOKUP_URL = f"{ITAD_URL}/games/history/v2"
     response = requests.get(
         LOOKUP_URL,
@@ -145,10 +153,23 @@ def price_history(itad_id, country='US'):
         print(response.text)
         return None
     else:
-        return response.json()
+        data = response.json()
+        ld_price_history:list[dict] = []
+        for price_log in data:
+            ld_price_history.append({
+                "itad_id": itad_id,
+                "country": country,
+                "regular": price_log['deal']['regular']['amountInt'],
+                "price": price_log['deal']['price']['amountInt'],
+                "cut": price_log['deal']['cut'],
+                "currency": price_log['deal']['price']['currency'],
+                "timestamp": price_log['timestamp']
+            }
+            )
+        return ld_price_history
 
 
-# Main Temporaire
+# Main temporaire
 
 # vn_dict = { 'id vndb': {dict avec caracteristiques}, 'v203': {vndbid:'v203', titre: ..., avis: ..., prix: ...}}
 # vn_dict = {}
@@ -160,3 +181,5 @@ def price_history(itad_id, country='US'):
 #     vn_dict[visual_novel_id]['price'] = itad_price(vn_dict[visual_novel_id]['itad_id'])
 
 # pprint.pprint(vn_dict)
+
+pprint.pprint(price_history(steam_to_itad_id('1113560')))
