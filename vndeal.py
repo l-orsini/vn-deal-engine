@@ -3,7 +3,7 @@ import re
 import requests
 import pprint
 from dotenv import load_dotenv
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import sqlite3
 
 load_dotenv()
@@ -15,6 +15,8 @@ ITAD_URL = "https://api.isthereanydeal.com"
 VN_URL = "https://api.vndb.org/kana/vn"
 
 DB_PATH = "vn.db"
+
+STEAM_SHOPID = 61 # Shop ID de Steam sur ITAD
 
 
 # VNDB.org API v2 (Kana) =============================================
@@ -53,14 +55,15 @@ def vnid_to_steamid(vnid):
         return steamid
 
 
-def load_n_vns(vn_list: list, nb_vn: int) -> list[dict]:
+def load_n_vns(nb_vn: int) -> list[dict]:
+    vn_list = []
     #SELECT id, title, rating, votecount, image.sexual, extlink
     #FROM vn 
-    #WHERE rating >= 75 AND votecount >= 1000 AND existe au moins un release SFW et un release Steam. pourrait renvoyer un VN avec lien Steam mais pas SFW et vice versa ?  
+    #WHERE rating >= 75 AND votecount >= 1000 AND existe au moins un release SFW et un release Steam.  
     vbody = {
         "filters": [
             "and",          # These are represented as JSON arrays where the first element is either "and" or "or", followed by two or more other predicates.
-            ["rating", ">=", 65],       # a ajuster
+            ["rating", ">=", 65],       # a ajuster ou rendre ajustable par user 
             ["votecount", ">=", 100],
             ["release", "=", ['and', ["minage", "<", 18],  ["extlink", "=", "steam"]], # Si vndb peut parcourir chaque release et verifier l'age recquis, il pourrait aussi renvoyer les liens externes ?
             # vndb filtre les vn qu'ils renvoie de son cote en regardant les releases mais ne peut pas renvoyer les infos trouves dans les releases. Tout simplement car y a pas dans fields.
@@ -86,18 +89,18 @@ def load_n_vns(vn_list: list, nb_vn: int) -> list[dict]:
                 "vndb_title": visual_novel["title"],
                 "vndb_rating": visual_novel["rating"],
                 "vndb_votecount": visual_novel["votecount"],
-                "steam_id": vnid_to_steamid(visual_novel['id']),
+                "steam_id": None,
                 "itad_id": None,
                 "price": None,
                 "price_history": None,
-                "recommendations": [],
                 }
             )
+    return vn_list
 
 # IsThereAnyDeal API (2.11.0) =============================================
 
 def steam_to_itad_id(steam_id):
-    LOOKUP_URL = f"{ITAD_URL}/lookup/id/shop/{61}/v1" #61 est le shop ID de steam sur ITAD
+    LOOKUP_URL = f"{ITAD_URL}/lookup/id/shop/{STEAM_SHOPID}/v1"
     payload = [f"app/{steam_id}"]
     response = requests.post(
         LOOKUP_URL,
@@ -112,17 +115,14 @@ def steam_to_itad_id(steam_id):
         data = response.json()
         return data.get(f"app/{steam_id}")
 
-def to_utc(ts):             # standarisation de toutes dates en UTC par securite car ITAD renvoie timestamp en heure locale (decalages horaires regions, heure hivers...) a appliquer direct quand timestamp est stocke dans dicts vn et price_history
-    return datetime.fromisoformat(ts).astimezone(timezone.utc).isoformat()
-
-def itad_price(itad_id, country='US'):
+def itad_price(itad_id, country='FR'):
     LOOKUP_URL = f"{ITAD_URL}/games/prices/v3"
     payload = [itad_id]
     response = requests.post(
         LOOKUP_URL,
         params={"key": ITAD_API_KEY,
                 "country": country,
-                "shops": 61},
+                "shops": STEAM_SHOPID},
         json=payload,
         timeout=10,
     )
@@ -142,14 +142,15 @@ def itad_price(itad_id, country='US'):
         }
         return dict_price
 
-def price_history(itad_id, country='US'):           # a parametrer pour avoir historique tres anciens sans se faire bloquer
+def price_history(itad_id, country='FR'):           # a parametrer pour avoir historique tres anciens sans se faire bloquer
     LOOKUP_URL = f"{ITAD_URL}/games/history/v2"
     response = requests.get(
         LOOKUP_URL,
         params={"key": ITAD_API_KEY,
                 "id": itad_id,
                 "country": country,
-                "shops": 61},
+                "shops": STEAM_SHOPID,
+                "since": "2011-01-01T00:00:00Z"},   
         timeout=10,
     )
     if response.status_code != 200:
@@ -171,18 +172,7 @@ def price_history(itad_id, country='US'):           # a parametrer pour avoir hi
             )
         return ld_price_history
 
-
-# Main temporaire
-# ldvn = []
-# load_n_vns(ldvn, 3)
-# for visual_novel_id in ldvn:
-#     visual_novel_id['itad_id'] = steam_to_itad_id(visual_novel_id['steam_id'])
-#     visual_novel_id['price'] = itad_price(visual_novel_id['itad_id'])
-#     visual_novel_id['price_history'] = price_history(visual_novel_id['itad_id'])
-
-# pprint.pprint(ldvn)
-
-# SQLite =============================================================
+# SQLite3 =============================================================
 
 def get_connection(path=DB_PATH):
     conn = sqlite3.connect(path)
@@ -218,10 +208,11 @@ def init_db(conn):
 
 def save_vn(conn, vn):
     current_time = (datetime.now(timezone.utc).isoformat())
-    sql = """INSERT INTO vn (vndb_id, steam_id, vndb_title, vndb_votecount, vndb_rating)
-             VALUES(:vndb_id, :steam_id, :vndb_title, :vndb_votecount, :vndb_rating)
+    sql = """INSERT INTO vn (vndb_id, steam_id, itad_id, vndb_title, vndb_votecount, vndb_rating, updated_at)
+             VALUES(:vndb_id, :steam_id, :itad_id, :vndb_title, :vndb_votecount, :vndb_rating, :updated_at)
              ON CONFLICT(vndb_id) DO UPDATE SET
-                vndb_rating    = excluded.vndb_rating,
+                itad_id = excluded.itad_id,
+                vndb_rating = excluded.vndb_rating,
                 vndb_votecount = excluded.vndb_votecount,
                 updated_at = excluded.updated_at"""
     conn.execute(sql, {**vn, "updated_at": current_time})
@@ -255,3 +246,26 @@ def get_sales(conn, itad_id, country):
     cur = conn.execute(sql, (itad_id, country,))
     rows = cur.fetchall()
     return [dict(row) for row in rows]
+
+def is_fresh(conn, vndb_id, max_time: timedelta) -> bool:
+    sql = """SELECT updated_at FROM vn WHERE vndb_id = ?"""
+    cur = conn.execute(sql, (vndb_id,))
+    row = cur.fetchone()
+    if row is None or row['updated_at'] is None:
+        return False
+    else:
+        current_time = datetime.now(timezone.utc)
+        updated_at = datetime.fromisoformat(row['updated_at'])
+        return current_time - updated_at < max_time
+
+def refresh_vns(conn, nb_vn, max_time:timedelta, country="FR"):
+    init_db(conn)
+    l_dict_vn = load_n_vns(nb_vn) 
+    for dict_vn in l_dict_vn:
+        if not is_fresh(conn, dict_vn['vndb_id'], max_time):
+            dict_vn["steam_id"] = vnid_to_steamid(dict_vn['vndb_id'])
+            dict_vn["itad_id"] = steam_to_itad_id(dict_vn["steam_id"])
+            dict_vn["price"] = itad_price(dict_vn["itad_id"], country)
+            dict_vn["price_history"] = price_history(dict_vn["itad_id"], country)
+            save_vn(conn, dict_vn)
+            save_price_history(conn, dict_vn["price_history"])
