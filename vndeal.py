@@ -240,12 +240,12 @@ def get_price_history(conn, itad_id, country)->list:
     rows = cur.fetchall()
     return [dict(row) for row in rows]
 
-def get_sales(conn, itad_id, country):
-    sql = """SELECT * FROM price_history WHERE itad_id = ? AND country = ? AND cut > 0
-             ORDER BY timestamp ASC"""
-    cur = conn.execute(sql, (itad_id, country,))
-    rows = cur.fetchall()
-    return [dict(row) for row in rows]
+# def get_sales(conn, itad_id, country):
+#     sql = """SELECT * FROM price_history WHERE itad_id = ? AND country = ? AND cut > 0
+#              ORDER BY timestamp DESC"""
+#     cur = conn.execute(sql, (itad_id, country,))
+#     rows = cur.fetchall()
+#     return [dict(row) for row in rows]
 
 def is_fresh(conn, vndb_id, max_time: timedelta) -> bool:
     sql = """SELECT updated_at FROM vn WHERE vndb_id = ?"""
@@ -269,3 +269,39 @@ def refresh_vns(conn, nb_vn, max_time:timedelta, country="FR"):
             dict_vn["price_history"] = price_history(dict_vn["itad_id"], country)
             save_vn(conn, dict_vn)
             save_price_history(conn, dict_vn["price_history"])
+
+# prediction prochaine date de solde par mediane
+
+def sales_gaps(history:list[dict])->list[timedelta]:    # en param: history est la liste de dict renvoye par requete SQL de la fonction get_price_history
+    l_gap_durations = []
+    gap_start = None
+    in_sale:bool = False
+    for log in history:   # 
+        timestamp:datetime = datetime.fromisoformat(log["timestamp"]).astimezone(timezone.utc)
+        if gap_start is None:
+            if log["cut"] == 0:
+                gap_start = timestamp
+                in_sale = False
+        else:
+            if log["cut"] == 0 and in_sale:
+                gap_start:datetime = timestamp
+                in_sale = False
+            elif log["cut"] > 0 and not in_sale:
+                gap_end:datetime = timestamp
+                gap_duration:timedelta = gap_end - gap_start
+                l_gap_durations.append(gap_duration)
+                in_sale = True
+    return l_gap_durations
+
+def gap_median(l_gaps:list[timedelta])->timedelta|None:
+    i_median:int = len(l_gaps) // 2
+    return sorted(l_gaps)[i_median]
+
+def estimate_next_sale(history:list[dict], seuil:int=10)->datetime|None: # None si pas assez d'entrees, eg: vn gratuit
+    l_gaps = sales_gaps(history)
+    if len(l_gaps) < seuil:
+        return None
+    estimated_gap_duration = gap_median(l_gaps)
+    latest_gap_start:int = history[-1]["timestamp"]
+    next_sale_date:datetime = datetime.fromisoformat(latest_gap_start) + estimated_gap_duration
+    return next_sale_date.astimezone(timezone.utc)
